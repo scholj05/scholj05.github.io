@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Location Search</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <style>
+        body {
+            font-family: sans-serif;
+            margin: 0;
+            display: flex;
+            height: 100vh;
+            justify-content: center;
+            align-items: center;
+            background: #f5f5f5;
+        }
+
+        .form-container,#loader {
+            background: white;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            width: 300px;
+        }
+
+        input,
+        button {
+            display: block;
+            margin: 1rem auto;
+            padding: 0.5rem;
+            width: 100%;
+            font-size: 1rem;
+        }
+
+        input {
+            width: 94%;
+        }
+
+        .status {
+            font-size: 0.9rem;
+            color: #555;
+            margin-top: 0.5rem;
+        }
+
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 999;
+        }
+
+        .modal-content {
+            background: white;
+            padding: 2rem;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 600px;
+            position: relative;
+            overflow: auto;
+            max-height: 90vh;
+        }
+
+        .close {
+            position: absolute;
+            top: 10px;
+            right: 20px;
+            font-size: 1.5rem;
+            cursor: pointer;
+        }
+
+        #weatherIcon {
+            width: 48px;
+            height: 48px;
+            vertical-align: middle;
+            margin-right: 0px;
+            display: inline-block;
+            background-size: cover;
+            background-position: center;
+            background-repeat: no-repeat;
+            background-color: #b1d3f1;
+            border-radius: 50%;
+        }
+
+        #modalWeather {
+            display: inline-block;
+            margin-right: 50px;
+
+        }
+
+        #toast {
+            visibility: hidden;
+            min-width: 200px;
+            background-color: #333;
+            color: #fff;
+            text-align: center;
+            border-radius: 8px;
+            padding: 12px;
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            font-size: 1rem;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.2);
+        }
+
+        #loader {
+            position: absolute;
+            background-color: #0000008f;
+            height: 200px;
+            z-index: 100;
+            align-content: center;
+            visibility: hidden;
+        }
+
+        #loader .loader {
+            color: #fff;
+            font-family: Consolas, Menlo, Monaco, monospace;
+            font-weight: bold;
+            font-size: 78px;
+            opacity: 0.8;
+        }
+
+        #loader .loader:before {
+            content: "{";
+            display: inline-block;
+            animation: pulse 0.4s alternate infinite ease-in-out;
+        }
+
+        #loader .loader:after {
+            content: "}";
+            display: inline-block;
+            animation: pulse 0.4s 0.3s alternate infinite ease-in-out;
+        }
+
+        @keyframes pulse {
+            to {
+                transform: scale(0.8);
+                opacity: 0.5;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Modal -->
+    <div id="infoModal" class="modal" style="display:none;">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2 id="modalTitle">Event Title</h2>
+            <p id="modalDescription">Event description goes here.</p>
+            <p><strong>Date/Time:</strong> <span id="modalDateTime"></span></p>
+            <p><strong>Location:</strong> <span id="modalLocation"></span></p>
+            <p><strong>Weather:</strong> <img id="weatherIcon"/> <span id="modalWeather"></span></p>
+            <img id="modalImage" src="" alt="Event Image" style="max-width: 100%; border-radius: 8px;" />
+            <div id="map" style="height: 300px; margin-top: 1rem;"></div>
+            <input type="email" id="emailInput" placeholder="Enter your email"
+                style="margin-top: 1rem; width: 100%; padding: 0.5rem; font-size: 1rem;" />
+            <button id="emailBtn" style="margin-top: 1rem;">Email Me</button>
+        </div>
+    </div>
+    <div>
+        <div id="loader">
+            <span class="loader"></span>
+        </div>
+        <div class="form-container">
+
+            <button id="getLocationBtn">Request Location</button>
+            <input id="radiusInput" type="number" min="1" max="100" value="10" />
+            <button id="searchBtn">Search</button>
+            <div class="status" id="status">Location not requested.</div>
+        </div>
+    </div>
+
+
+    <div id="toast"></div>
+
+    <script>
+        let lat = null;
+        let lng = null;
+
+        const controller = new AbortController();
+
+        document.querySelector('body').addEventListener('click', (event) => {
+            
+            // Cancel fetch if body is clicked while fetching
+            if (document.getElementById("loader").style.visibility === "visible") {
+                setLoading(document.getElementById("loader"), false);
+                controller.abort();
+                console.log("Fetch aborted due to body click.");
+                showToast("❌ Fetch aborted.");
+                stopPropagation(event);
+            }
+            if (document.getElementById('infoModal').style.display !== 'none') {
+                document.getElementById('infoModal').style.display = 'none';
+                stopPropagation(event);
+            }
+        }, true);
+
+        document.getElementById('getLocationBtn').addEventListener('click', () => {
+            if (!navigator.geolocation) {
+                alert("Geolocation is not supported by your browser.");
+                return;
+            }
+            setLoading(document.getElementById("loader"), true);
+            navigator.geolocation.getCurrentPosition(
+                (position) => {
+                    lat = position.coords.latitude;
+                    lng = position.coords.longitude;
+                    document.getElementById('status').textContent = `Location: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+                    setLoading(document.getElementById("loader"), false);
+                },
+                (error) => {
+                    alert("Error retrieving location.");
+                    console.error(error);
+                    setLoading(document.getElementById("loader"), false);
+                }
+            );
+        });
+
+        // Sample function to open modal with data
+        function showModal(data) {
+            document.getElementById('modalTitle').textContent = data.name;
+            document.getElementById('modalDescription').textContent = data.description;
+            document.getElementById('modalDateTime').textContent = data.datetime;
+            document.getElementById('modalLocation').textContent = data.location;
+            document.getElementById('modalWeather').textContent = data.weather || 'No data';
+            document.getElementById('weatherIcon').src = data.weatherIcon || '';
+            document.getElementById('modalImage').src = data.image;
+
+            // Show modal
+            document.getElementById('infoModal').style.display = 'flex';
+
+            // Initialize Leaflet map
+            setTimeout(() => {
+                const map = L.map('map').setView([data.lat, data.lng], 13);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+                L.marker([data.lat, data.lng]).addTo(map);
+            }, 100); // Delay to ensure DOM is visible
+        }
+
+        // Close modal handler
+        document.querySelector('.close').onclick = () => {
+            document.getElementById('infoModal').style.display = 'none';
+        };
+
+        // Example button or action
+        // You can trigger this manually or after a fetch
+        document.getElementById('searchBtn').addEventListener('click', () => {
+            if (lat === null || lng === null) {
+                showToast("Please request your location first.");
+                return;
+            }
+            setLoading(document.getElementById("loader"), true);
+            fetch("http://localhost:5678/webhook/f08c8d17-01bf-4e30-8f43-c661e8e32153?" + new URLSearchParams({
+                "lat": lat,
+                "lng": lng,
+                "radius": document.getElementById('radiusInput').value
+            }), {
+                method: "GET",
+                headers: { "Content-Type": "application/json",
+                    "Cross-Origin-Resource-Policy": "cross-origin",
+                    "Access-Control-Allow-Origin": "*",
+                 },
+                setTimeout: 120000,
+                signal: controller.signal
+            })
+                .then(response => {
+                    console.log("Response:", response.status, response.statusText);
+                    if (!response.ok) throw new Error("Failed to send");
+                    console.log("Response body:", response.body);
+                    return response.json();
+                }).then(data => {
+                    console.log("Data received:", data);
+                    setLoading(document.getElementById("loader"), false);
+                    const exampleData = {
+                        name: data.name,
+                        description: data.description,
+                        datetime: data.datetime,
+                        location: data.location,
+                        weather: data.weather,
+                        weatherIcon: data.weatherIcon,
+                        image: data.image,
+                        lat: data.lat, lng: data.lng
+                    };
+                    showModal(exampleData);
+                })
+                .catch(error => {
+                    console.error("Error:", error);
+                    setLoading(document.getElementById("loader"), false);
+                    showToast("❌ Failed to search.");
+                });
+
+
+        });
+
+        document.getElementById('emailBtn').addEventListener('click', () => {
+            showToast("✅ Email sent successfully!");
+            const email = document.getElementById('emailInput').value.trim();
+            const name = document.getElementById('modalTitle').textContent;
+            const description = document.getElementById('modalDescription').textContent;
+            const datetime = document.getElementById('modalDateTime').textContent;
+            const location = document.getElementById('modalLocation').textContent;
+            const weather = document.getElementById('modalWeather').textContent;
+
+            if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                alert("Please enter a valid email address.");
+                return;
+            }
+
+            const payload = {
+                email,
+                name,
+                description,
+                datetime,
+                location,
+                weather
+            };
+
+            fetch("https://your-n8n-webhook-url", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            })
+                .then(response => {
+                    if (!response.ok) throw new Error("Failed to send");
+                    showToast("✅ Email sent successfully!");
+                })
+                .catch(error => {
+                    console.error("Error:", error);
+                    showToast("❌ Failed to send email.");
+                });
+        });
+
+        function showToast(message) {
+            const toast = document.getElementById("toast");
+            toast.textContent = message;
+            toast.style.visibility = "visible";
+            toast.style.opacity = "1";
+            setTimeout(() => {
+                toast.style.visibility = "hidden";
+                toast.style.opacity = "0";
+            }, 3000);
+        }
+
+        function setLoading(element, show) {
+            document.getElementById("loader").style.visibility = show ? "visible" : "hidden";
+        }
+    </script>
+
+</body>
+
+</html>
